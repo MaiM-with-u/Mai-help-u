@@ -3,6 +3,9 @@ import sys
 import shutil
 import subprocess
 
+# 添加版本号常量
+VERSION = "0.1-for-0.6.2"
+
 def check_pyinstaller():
     """检查是否已安装PyInstaller，如果没有则自动安装"""
     try:
@@ -79,7 +82,7 @@ if __name__ == "__main__":
     # 将工作目录设置为可执行文件所在目录
     os.chdir(os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.getcwd())
     
-    print("======= MaiBot配置助手 =======")
+    print("======= MaiBot配置助手 v{VERSION} =======")
     print("该工具用于帮助检查和分析MaiBot配置文件")
     print("===============================")
     
@@ -173,16 +176,19 @@ if __name__ == "__main__":
     
     print("\\n程序结束，感谢使用MaiBot配置助手！")
     input("按回车键退出...")
-""")
+""".replace("{VERSION}", VERSION))
     
     # 根据操作系统修改路径分隔符
     add_data_option = "build_temp/config_notice.md;." if os.name == 'nt' else "build_temp/config_notice.md:."
+    
+    # 输出文件名包含版本号
+    output_name = f"麦麦帮助配置-{VERSION}"
     
     # 开始打包
     pyinstaller_cmd = [
         "pyinstaller",
         "--onefile",  # 打包成单个文件
-        "--name", "MaiHelperConfig",  # 输出文件名
+        "--name", output_name,  # 输出文件名包含版本号
         f"--add-data={add_data_option}",  # 添加配置提示文件
         "--clean",  # 清理临时文件
         "--console",  # 显示控制台窗口
@@ -191,7 +197,7 @@ if __name__ == "__main__":
     
     try:
         subprocess.check_call(pyinstaller_cmd)
-        print("打包完成，可执行文件位于 dist/MaiHelperConfig.exe")
+        print(f"打包完成，可执行文件位于 dist/{output_name}.exe")
         return True
     except subprocess.CalledProcessError as e:
         print(f"打包失败: {e}")
@@ -203,7 +209,7 @@ if __name__ == "__main__":
         shutil.rmtree("build_temp", ignore_errors=True)
 
 if __name__ == "__main__":
-    print("开始打包MaiBot配置助手...")
+    print(f"开始打包MaiBot配置助手 v{VERSION}...")
     print("开始检查依赖...")
     check_dependencies()
     check_pyinstaller()

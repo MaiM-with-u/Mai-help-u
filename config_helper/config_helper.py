@@ -31,6 +31,8 @@ class EnvInfo:
         for line in self.env_content_txt.splitlines():
             if line.strip() == "":
                 continue
+            if "=" not in line:
+                continue  # 跳过没有等号的行
             key, value = line.split("=", 1)
             self.env_content[key.strip()] = value.strip()
         
