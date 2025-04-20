@@ -2,9 +2,12 @@ import os
 import sys
 import shutil
 import subprocess
+import glob
+import re
+from typing import Union
 
 # 添加版本号常量
-VERSION = "0.1-for-0.6.2"
+VERSION = "0.2-for-0.6.2~0.6.3"
 
 def check_pyinstaller():
     """检查是否已安装PyInstaller，如果没有则自动安装"""
@@ -33,7 +36,6 @@ def check_files_exist():
     """检查必要文件是否存在"""
     files_to_check = [
         ("config_helper/config_helper.py", "配置助手主程序"),
-        ("config_helper/config_notice.md", "配置提示文件")
     ]
     
     all_exist = True
@@ -57,32 +59,32 @@ def build_exe():
     if not os.path.exists("build_temp"):
         os.makedirs("build_temp")
     
-    # 复制需要的文件到临时目录
+    # 复制主脚本
     shutil.copy("config_helper/config_helper.py", "build_temp/")
-    shutil.copy("config_helper/config_notice.md", "build_temp/")
+    
+    # 查找并复制所有 .md 文件
+    md_files = glob.glob("config_helper/*.md")
+    if not md_files:
+        print("警告：在 config_helper 目录下未找到任何 .md 文件。")
+    else:
+        print(f"找到以下 .md 文件将打包：{', '.join(os.path.basename(f) for f in md_files)}")
+        for md_file in md_files:
+            shutil.copy(md_file, "build_temp/")
     
     # 创建main.py作为入口点
     with open("build_temp/main.py", "w", encoding="utf-8") as f:
         f.write("""
 import os
 import sys
-from config_helper import EnvInfo, ConfigInfo, ConfigHelper
-
-def get_resource_path(relative_path):
-    if getattr(sys, 'frozen', False):
-        # 如果是打包后的可执行文件，使用_MEIPASS目录
-        base_path = sys._MEIPASS
-    else:
-        # 否则使用当前目录
-        base_path = os.path.dirname(os.path.abspath(__file__))
-    
-    return os.path.join(base_path, relative_path)
+import re
+from typing import Union
+from config_helper import EnvInfo, ConfigInfo, ConfigHelper, get_maibot_version
 
 if __name__ == "__main__":
     # 将工作目录设置为可执行文件所在目录
     os.chdir(os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.getcwd())
     
-    print("======= MaiBot配置助手 v{VERSION} =======")
+    print(f"======= MaiBot配置助手 v{VERSION} =======")
     print("该工具用于帮助检查和分析MaiBot配置文件")
     print("===============================")
     
@@ -101,22 +103,32 @@ if __name__ == "__main__":
         input("按回车键退出...")
         exit()
     
+    # 获取 MaiBot 版本号 (假设 MaiBot-Core 在 exe 所在目录的上一级)
+    # 注意：这个路径假设可能需要用户根据实际情况调整
+    maibot_core_path = os.path.join("..", "MaiBot-Core") # 假设 MaiBot-Core 在上一级
+    if not os.path.isdir(maibot_core_path):
+        # 如果上一级没有，尝试当前目录 (如果用户把exe放到了 MaiBot-Core 同级)
+         maibot_core_path = "."
+         print(f"警告：未在 '../MaiBot-Core' 找到 MaiBot 核心目录，将尝试在当前目录查找 config.py")
+         
+    maibot_config_path = os.path.join(maibot_core_path, "src", "config", "config.py")
+    maibot_version = get_maibot_version(maibot_config_path)
+    if maibot_version:
+        print(f"检测到 MaiBot 版本: {maibot_version}")
+    else:
+        print("未检测到 MaiBot 版本，将使用默认配置提示。")
+
     config_path = "./config/bot_config.toml"
     config_info = ConfigInfo(config_path)
     print("开始检查config/bot_config.toml文件...")
     result = config_info.check_bot_config()
     print(config_info)
     
-    helper = ConfigHelper(config_info, model_using, env_info)
+    # 创建 ConfigHelper 时传入版本号
+    helper = ConfigHelper(config_info, model_using, env_info, maibot_version=maibot_version)
     
-    # 加载配置提示，确保路径正确
-    try:
-        notice_path = get_resource_path("config_notice.md")
-        with open(notice_path, "r", encoding="utf-8") as f:
-            helper.config_notice = f.read()
-    except Exception as e:
-        print(f"加载配置提示时出错: {str(e)}")
-        helper.config_notice = "无法加载配置提示文件"
+    # 调用 load_config_notice() 来加载，它会处理版本
+    helper.load_config_notice() 
     
     # 如果配置文件读取成功，展示如何获取字段
     if config_info.config_content:
@@ -178,8 +190,12 @@ if __name__ == "__main__":
     input("按回车键退出...")
 """.replace("{VERSION}", VERSION))
     
-    # 根据操作系统修改路径分隔符
-    add_data_option = "build_temp/config_notice.md;." if os.name == 'nt' else "build_temp/config_notice.md:."
+    # 为所有找到的 .md 文件生成 --add-data 参数
+    add_data_options = []
+    separator = ';' if os.name == 'nt' else ':'
+    for md_file in md_files:
+        base_name = os.path.basename(md_file)
+        add_data_options.extend(["--add-data", f"build_temp/{base_name}{separator}."])
     
     # 输出文件名包含版本号
     output_name = f"麦麦帮助配置-{VERSION}"
@@ -187,13 +203,15 @@ if __name__ == "__main__":
     # 开始打包
     pyinstaller_cmd = [
         "pyinstaller",
-        "--onefile",  # 打包成单个文件
-        "--name", output_name,  # 输出文件名包含版本号
-        f"--add-data={add_data_option}",  # 添加配置提示文件
-        "--clean",  # 清理临时文件
-        "--console",  # 显示控制台窗口
-        "build_temp/main.py"  # 入口脚本
+        "--onefile",
+        "--name", output_name,
+        *add_data_options,
+        "--clean",
+        "--console",
+        "build_temp/main.py"
     ]
+    
+    print("PyInstaller 命令:", ' '.join(pyinstaller_cmd))
     
     try:
         subprocess.check_call(pyinstaller_cmd)

@@ -1,12 +1,33 @@
 import os
 import tomli
 from packaging.version import Version
+import re # 添加 re 模块用于正则匹配
 
 import time
-from typing import Generator
+from typing import Generator, Union
 
 import requests
 import json
+
+# 新增函数：获取 MaiBot 版本号
+def get_maibot_version(version_file_path: str) -> Union[str, None]:
+    """从指定的 config.py 文件中读取 mai_version_main"""
+    if not os.path.exists(version_file_path):
+        print(f"警告：未找到版本文件 {version_file_path}")
+        return None
+    try:
+        with open(version_file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+            # 使用正则表达式查找 mai_version_main
+            match = re.search(r"mai_version_main\s*=\s*[\"']([^\"']+)[\"']", content)
+            if match:
+                return match.group(1)
+            else:
+                print(f"警告：在 {version_file_path} 中未找到 mai_version_main")
+                return None
+    except Exception as e:
+        print(f"读取版本文件 {version_file_path} 时出错: {e}")
+        return None
 
        
 class EnvInfo:
@@ -29,12 +50,21 @@ class EnvInfo:
         
         #逐行读取所有配置项
         for line in self.env_content_txt.splitlines():
-            if line.strip() == "":
+            line = line.strip() # 先去除首尾空格
+            # 跳过空行、注释行或不包含'='的行
+            if not line or line.startswith('#') or "=" not in line:
                 continue
-            if "=" not in line:
-                continue  # 跳过没有等号的行
-            key, value = line.split("=", 1)
-            self.env_content[key.strip()] = value.strip()
+            
+            # 分割键值
+            parts = line.split("=", 1)
+            key = parts[0].strip()
+            value = parts[1].strip() if len(parts) > 1 else ""
+            
+            # 忽略没有键名或没有值的行
+            if not key or not value:
+                continue
+                
+            self.env_content[key] = value
         
         # 检查.env文件的SILICONFLOW_KEY和SILICONFLOW_BASE_URL是否为空
         if "SILICONFLOW_KEY" not in self.env_content or "SILICONFLOW_BASE_URL" not in self.env_content:
@@ -345,10 +375,11 @@ class ConfigInfo:
         return f"配置文件路径：{self.config_path}\n配置文件版本：{self.version}\n错误信息：{self.error_message}"
 
 class ConfigHelper:
-    def __init__(self, config_info: ConfigInfo, model_using = "", env_info: EnvInfo = None):
+    def __init__(self, config_info: ConfigInfo, model_using: str = "", env_info: EnvInfo = None, maibot_version: Union[str, None] = None):
         self.config_info = config_info
         self.config_notice = None
         self.helper_model = LLM_request_off(model_name=model_using,env_info=env_info)
+        self.maibot_version = maibot_version # 存储版本号
     
     def deal_format_error(self, error_message, config_content_txt):
         prompt = f"""
@@ -370,8 +401,31 @@ class ConfigHelper:
             print("请手动检查配置文件格式错误：", error_message)
     
     def load_config_notice(self):
-        with open(os.path.join(os.path.dirname(__file__), "config_notice.md"), "r", encoding="utf-8") as f:
-            self.config_notice = f.read()
+        base_dir = os.path.dirname(__file__)
+        default_notice_path = os.path.join(base_dir, "config_notice.md")
+        notice_path_to_load = default_notice_path
+
+        if self.maibot_version:
+            version_specific_notice_name = f"config_notice_v{self.maibot_version}.md"
+            version_specific_notice_path = os.path.join(base_dir, version_specific_notice_name)
+            if os.path.exists(version_specific_notice_path):
+                notice_path_to_load = version_specific_notice_path
+                print(f"已加载版本特定通知文件：{version_specific_notice_name}")
+            else:
+                print(f"警告：未找到版本 {self.maibot_version} 的特定通知文件 ({version_specific_notice_name})，将加载默认文件。")
+        else:
+            print("未提供 MaiBot 版本号，将加载默认通知文件。")
+
+        if os.path.exists(notice_path_to_load):
+            try:
+                with open(notice_path_to_load, "r", encoding="utf-8") as f:
+                    self.config_notice = f.read()
+            except Exception as e:
+                print(f"加载通知文件 {notice_path_to_load} 时出错: {e}")
+                self.config_notice = "无法加载配置文件说明。" # 提供默认值
+        else:
+            print(f"警告：未找到默认通知文件 {default_notice_path}。")
+            self.config_notice = "无法加载配置文件说明。" # 提供默认值
     
     def deal_question(self, question):
         prompt = f"""
@@ -407,16 +461,26 @@ if __name__ == "__main__":
     elif result == "not_found":
         print(env_info.error_message)
         exit()
+
+    # 定义 MaiBot Core 配置文件路径 (假设 MaiBot-Core 在工作区根目录)
+    # 请根据你的实际项目结构调整此路径
+    maibot_config_path = os.path.join("..", "MaiBot-Core", "src", "config", "config.py")
     
+    # 获取 MaiBot 版本号
+    maibot_version = get_maibot_version(maibot_config_path)
+    if maibot_version:
+        print(f"检测到 MaiBot 版本: {maibot_version}")
+
     config_path = "./config/bot_config.toml"
     config_info = ConfigInfo(config_path)
     print("开始检查config/bot_config.toml文件...")
     result = config_info.check_bot_config()
     print(config_info)
-    
-    helper = ConfigHelper(config_info, model_using, env_info)
-    helper.load_config_notice()
-    
+
+    # 创建 ConfigHelper 时传入版本号
+    helper = ConfigHelper(config_info, model_using, env_info, maibot_version=maibot_version)
+    helper.load_config_notice() # 加载通知文件
+
     # 如果配置文件读取成功，展示如何获取字段
     if config_info.config_content:
         print("\n配置文件读取成功，可以访问任意字段：")
@@ -443,15 +507,15 @@ if __name__ == "__main__":
         # 检查某字段是否存在
         if config_info.has_field("model.llm_normal.temp"):
             temp = config_info.get_value("model.llm_normal.temp")
-            print(f"\n回复模型温度: {temp}")
+            # print(f"\n回复模型温度: {temp}")
         else:
             print("\n回复模型温度未设置")
             
         # 获取心流相关设置
         if config_info.has_field("heartflow"):
             heartflow = config_info.get_section("heartflow")
-            print(f"\n心流更新间隔: {heartflow.get('heart_flow_update_interval')}秒")
-            print(f"子心流更新间隔: {heartflow.get('sub_heart_flow_update_interval')}秒")
+            # print(f"\n心流更新间隔: {heartflow.get('heart_flow_update_interval')}秒")
+            # print(f"子心流更新间隔: {heartflow.get('sub_heart_flow_update_interval')}秒")
             
     if result == "critical_error":
         print("配置文件存在严重错误，建议重新下载MaiBot")
